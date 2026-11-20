@@ -1,0 +1,32 @@
+{
+  "name": "ligolo",
+  "command_name": "ligolo",
+  "version": "v1.0.0",
+  "extension_author": "NitelPhyoe",
+  "original_author": "Nicolas Chatelain (nicocha30)",
+  "repo_url": "https://github.com/nicocha30/ligolo-ng",
+  "help": "Run the ligolo-ng agent from a Sliver session.",
+  "entrypoint": "entrypoint",
+  "files": [
+    {
+      "os": "windows",
+      "arch": "amd64",
+      "path": "ligolo.x64.dll"
+    },
+    {
+      "os": "windows",
+      "arch": "386",
+      "path": "ligolo.x86.dll"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "path": "ligolo.x64.so"
+    },
+    {
+      "os": "linux",
+      "arch": "386",
+      "path": "ligolo.x86.so"
+    }
+  ]
+}

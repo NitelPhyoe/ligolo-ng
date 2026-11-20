@@ -33,6 +33,7 @@ An advanced, yet simple, tunneling tool that uses TUN interfaces.
 - [Demo](#demo)
 - [How is this different from Ligolo/Chisel/Meterpreter... ?](#how-is-this-different-from-ligolochiselmeterpreter-)
 - [How to use - documentation - tutorial](#how-to-use---documentation---tutorial)
+- [Sliver C2 extension](#sliver-c2-extension)
 - [Does it require Administrator/root access ?](#does-it-require-administratorroot-access-)
 - [Supported protocols/packets](#supported-protocolspackets)
 - [Performance](#performance)
@@ -85,6 +86,17 @@ This allows running tools like *nmap* without the use of *proxychains* (simpler 
 ## How to use - documentation - tutorial
 
 You will find the documentation for Ligolo-ng, as well as the steps to follow to get it up and running on the [Ligolo-ng Documentation](https://docs.ligolo.ng/)
+
+## Sliver C2 extension
+
+The *agent* can be built as a [Sliver](https://github.com/BishopFox/sliver) client extension, so you can start a tunnel from a session instead of uploading a binary. Build and install it from a Linux host (Kali included):
+
+```sh
+sudo apt install -y gcc gcc-multilib mingw-w64
+make sliver
+```
+
+`make sliver` builds `ligolo.x64/x86.dll` and `ligolo.x64/x86.so` from `cmd/agent`, then installs them with `extension.json` into `~/.sliver-client/extensions/ligolo`. Override the destination with `make sliver SLIVER_EXT=/path/to/extensions/ligolo`. If you already have the libraries, `make extension` installs only.
 
 ## Does it require Administrator/root access ?
 
