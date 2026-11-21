@@ -92,11 +92,26 @@ You will find the documentation for Ligolo-ng, as well as the steps to follow to
 The *agent* can be built as a [Sliver](https://github.com/BishopFox/sliver) client extension, so you can start a tunnel from a session instead of uploading a binary. Build and install it from a Linux host (Kali included):
 
 ```sh
-sudo apt install -y gcc gcc-multilib mingw-w64
+sudo apt install -y gcc mingw-w64
 make sliver
 ```
 
-`make sliver` builds `ligolo.x64/x86.dll` and `ligolo.x64/x86.so` from `cmd/agent`, then installs them with `extension.json` into `~/.sliver-client/extensions/ligolo`. Override the destination with `make sliver SLIVER_EXT=/path/to/extensions/ligolo`. If you already have the libraries, `make extension` installs only.
+`make sliver` builds `ligolo.x64.dll` and `ligolo.x86.dll` from `cmd/agent`, then installs them with `extension.json` into `~/.sliver-client/extensions/ligolo`. Override the destination with `make sliver SLIVER_EXT=/path/to/extensions/ligolo`. If you already have the DLLs, `make extension` installs only.
+
+From a Sliver session, start the agent with the address, then any extra flags:
+
+```sh
+ligolo -- connect 10.10.14.173:11601 -ignore-cert
+```
+
+Tunnels run in the background; `list` shows them and `stop <taskId>` shuts one down:
+
+```sh
+ligolo -- list
+ligolo -- stop 1
+```
+
+An agent that fails immediately (bad address, unreachable listener) reports the error in the command output; one that connects keeps running for the rest of the session.
 
 ## Does it require Administrator/root access ?
 

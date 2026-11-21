@@ -41,19 +41,15 @@ windows-arm64: lint
 
 SLIVER_EXT ?= $(HOME)/.sliver-client/extensions/ligolo
 
-linux_binaries: lint
-	@env CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -buildmode=c-shared -trimpath ${LDFLAGS} ${GCFLAGS} ${ASMFLAGS} -o ${BASEDIR}/ligolo.x64.so ./cmd/agent
-	@env CGO_ENABLED=1 GOOS=linux GOARCH=386 go build -buildmode=c-shared -trimpath ${LDFLAGS} ${GCFLAGS} ${ASMFLAGS} -o ${BASEDIR}/ligolo.x86.so ./cmd/agent
-
 windows_binaries: lint
 	@env CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc-win32 go build -buildmode=c-shared -trimpath ${LDFLAGS} ${GCFLAGS} ${ASMFLAGS} -o ${BASEDIR}/ligolo.x64.dll ./cmd/agent
 	@env CGO_ENABLED=1 GOOS=windows GOARCH=386 CC=i686-w64-mingw32-gcc-win32 go build -buildmode=c-shared -trimpath ${LDFLAGS} ${GCFLAGS} ${ASMFLAGS} -o ${BASEDIR}/ligolo.x86.dll ./cmd/agent
 
-sliver: windows_binaries linux_binaries extension ## Build + install the Sliver agent extension
+sliver: windows_binaries extension ## Build + install the Sliver agent extension
 
 extension: ## Copy extension.json and the agent libs into the Sliver extensions dir
 	@mkdir -p ${SLIVER_EXT}
-	@cp extension.json ${BASEDIR}/ligolo.x64.dll ${BASEDIR}/ligolo.x86.dll ${BASEDIR}/ligolo.x64.so ${BASEDIR}/ligolo.x86.so ${SLIVER_EXT}/
+	@cp extension.json ${BASEDIR}/ligolo.x64.dll ${BASEDIR}/ligolo.x86.dll ${SLIVER_EXT}/
 	@echo "Installed Sliver extension -> ${SLIVER_EXT}"
 
 tidy:
@@ -87,4 +83,4 @@ terminal_agent:
 	go run cmd/agent/main.go -connect localhost:11601 -ignore-cert
 
 
-.PHONY: all linux linux-arm64 windows windows-arm64 linux_binaries windows_binaries sliver extension tidy update dep lint security release clean terminal
+.PHONY: all linux linux-arm64 windows windows-arm64 windows_binaries sliver extension tidy update dep lint security release clean terminal

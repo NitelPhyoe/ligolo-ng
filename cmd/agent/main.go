@@ -23,6 +23,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -48,34 +49,54 @@ var (
 )
 
 func main() {
-	var tlsConfig tls.Config
-	var ignoreCertificate = flag.Bool("ignore-cert", false, "ignore TLS certificate validation (dangerous), only for debug purposes")
-	var acceptFingerprint = flag.String("accept-fingerprint", "", "accept certificates matching the following SHA256 fingerprint (hex format)")
-	var verbose = flag.Bool("v", false, "enable verbose mode")
-	var retry = flag.Bool("retry", false, "auto-retry on initial connection error")
-	var retryDelay = flag.Int("retry-delay", 5, "retry delay in seconds for initial connection (default: 5)")
-	var reconnect = flag.Bool("reconnect", true, "auto-reconnect after established connection is lost")
-	var reconnectDelay = flag.Int("reconnect-delay", 20, "reconnection delay in seconds (default: 20)")
-	var reconnectTimeout = flag.Int("reconnect-timeout", 300, "total reconnection timeout in seconds (default: 300 = 5 minutes)")
-	var socksProxy = flag.String("proxy", "", "proxy URL address (http://admin:secret@127.0.0.1:8080) or socks://admin:secret@127.0.0.1:8080")
-	var serverAddr = flag.String("connect", "", "connect to proxy (domain:port)")
-	var bindAddr = flag.String("bind", "", "bind to ip:port")
-	var userAgent = flag.String("ua", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36", "HTTP User-Agent")
-	var versionFlag = flag.Bool("version", false, "show the current version")
+	if err := run(os.Args[1:]); err != nil {
+		logrus.Fatal(err)
+	}
+}
 
-	flag.Usage = func() {
+// run parses args and runs the agent connection loop. Errors are returned
+// rather than logged as fatal, so the same code can back the Sliver extension
+// entrypoint without calling os.Exit() on the implant process.
+func run(args []string) error {
+	return runContext(context.Background(), args)
+}
+
+// runContext is run with a context, so a Sliver task can be stopped.
+func runContext(ctx context.Context, args []string) error {
+	var tlsConfig tls.Config
+	fs := flag.NewFlagSet("ligolo-agent", flag.ContinueOnError)
+	var ignoreCertificate = fs.Bool("ignore-cert", false, "ignore TLS certificate validation (dangerous), only for debug purposes")
+	var acceptFingerprint = fs.String("accept-fingerprint", "", "accept certificates matching the following SHA256 fingerprint (hex format)")
+	var verbose = fs.Bool("v", false, "enable verbose mode")
+	var retry = fs.Bool("retry", false, "auto-retry on initial connection error")
+	var retryDelay = fs.Int("retry-delay", 5, "retry delay in seconds for initial connection (default: 5)")
+	var reconnect = fs.Bool("reconnect", true, "auto-reconnect after established connection is lost")
+	var reconnectDelay = fs.Int("reconnect-delay", 20, "reconnection delay in seconds (default: 20)")
+	var reconnectTimeout = fs.Int("reconnect-timeout", 300, "total reconnection timeout in seconds (default: 300 = 5 minutes)")
+	var socksProxy = fs.String("proxy", "", "proxy URL address (http://admin:secret@127.0.0.1:8080) or socks://admin:secret@127.0.0.1:8080")
+	var serverAddr = fs.String("connect", "", "connect to proxy (domain:port)")
+	var bindAddr = fs.String("bind", "", "bind to ip:port")
+	var userAgent = fs.String("ua", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36", "HTTP User-Agent")
+	var versionFlag = fs.Bool("version", false, "show the current version")
+
+	fs.Usage = func() {
 		fmt.Printf("Ligolo-ng %s / %s / %s\n", version, commit, date)
 		fmt.Println("Made in France with love by @Nicocha30!")
 		fmt.Println("https://github.com/nicocha30/ligolo-ng")
 		fmt.Printf("\nUsage of %s:\n", os.Args[0])
-		flag.PrintDefaults()
+		fs.PrintDefaults()
 	}
 
-	flag.Parse()
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
 
 	if *versionFlag {
 		fmt.Printf("Ligolo-ng %s / %s / %s\n", version, commit, date)
-		return
+		return nil
 	}
 
 	logrus.SetReportCaller(*verbose)
@@ -85,16 +106,16 @@ func main() {
 	}
 
 	if *bindAddr != "" {
-		bind(&tlsConfig, *bindAddr)
+		return bind(ctx, &tlsConfig, *bindAddr)
 	}
 
 	if *serverAddr == "" {
-		logrus.Fatal("please, specify the target host user -connect host:port")
+		return fmt.Errorf("please, specify the target host user -connect host:port")
 	}
 
 	ligoloUrl, err := utils.ParseLigoloURL(*serverAddr)
 	if err != nil {
-		logrus.Fatalf("Invalid connect address, please use http(s)://host:port for websocket or host:port for tcp")
+		return fmt.Errorf("invalid connect address, please use http(s)://host:port for websocket or host:port for tcp")
 	}
 
 	tlsConfig.ServerName = ligoloUrl.Hostname()
@@ -106,13 +127,13 @@ func main() {
 
 	// Validate retry and reconnect delays
 	if *retryDelay < 1 {
-		logrus.Fatal("retry-delay must be at least 1 second")
+		return fmt.Errorf("retry-delay must be at least 1 second")
 	}
 	if *reconnectDelay < 1 {
-		logrus.Fatal("reconnect-delay must be at least 1 second")
+		return fmt.Errorf("reconnect-delay must be at least 1 second")
 	}
 	if *reconnectTimeout < *reconnectDelay {
-		logrus.Fatal("reconnect-timeout must be greater than reconnect-delay")
+		return fmt.Errorf("reconnect-timeout must be greater than reconnect-delay")
 	}
 
 	var conn net.Conn
@@ -124,25 +145,29 @@ func main() {
 		var err error
 		var connSuccess bool
 
+		if ctx.Err() != nil {
+			return nil
+		}
+
 		if ligoloUrl.IsWebsocket() {
 			//websocket
-			connSuccess, err = wsconnect(&tlsConfig, *serverAddr, *socksProxy, *userAgent)
+			connSuccess, err = wsconnect(ctx, &tlsConfig, *serverAddr, *socksProxy, *userAgent)
 		} else {
 			if *socksProxy != "" {
 				//suppose that scheme is socks:// or socks5://
 				var proxyUrl *url.URL
 				proxyUrl, err = url.Parse(*socksProxy)
 				if err != nil {
-					logrus.Fatal("invalid proxy address, please use socks5://host:port")
+					return fmt.Errorf("invalid proxy address, please use socks5://host:port")
 				}
 				if proxyUrl.Scheme == "http" {
-					logrus.Fatal("Can't use http-proxy with direct (tcp) connection. Only with websocket")
+					return fmt.Errorf("can't use http-proxy with direct (tcp) connection. Only with websocket")
 				}
 				if proxyUrl.Scheme == "socks" || proxyUrl.Scheme == "socks5" {
 					pass, _ := proxyUrl.User.Password()
 					conn, err = sockDial(*serverAddr, proxyUrl.Host, proxyUrl.User.Username(), pass)
 				} else {
-					logrus.Fatal("invalid socks5 address, please use socks://host:port")
+					return fmt.Errorf("invalid socks5 address, please use socks://host:port")
 				}
 			} else {
 				conn, err = net.Dial("tcp", *serverAddr)
@@ -163,7 +188,7 @@ func main() {
 					}
 				}
 				tlsConn := tls.Client(conn, &tlsConfig)
-				connSuccess, err = connect(tlsConn)
+				connSuccess, err = connect(ctx, tlsConn)
 			}
 		}
 
@@ -180,15 +205,21 @@ func main() {
 			logrus.Errorf("Connection error: %v", err)
 		}
 
+		if ctx.Err() != nil {
+			return nil
+		}
+
 		// Determine retry/reconnect behavior
 		if !connectionEstablished {
 			// Initial connection attempt failed
 			if *retry {
 				logrus.Infof("Retrying initial connection in %d seconds.", *retryDelay)
-				time.Sleep(time.Duration(*retryDelay) * time.Second)
+				if !sleepContext(ctx, time.Duration(*retryDelay)*time.Second) {
+					return nil
+				}
 				continue
 			} else {
-				logrus.Fatal("Initial connection failed. Use -retry flag to enable automatic retry.")
+				return fmt.Errorf("initial connection failed. Use -retry flag to enable automatic retry")
 			}
 		} else {
 			// Connection was previously established but now lost
@@ -204,15 +235,29 @@ func main() {
 				elapsed := time.Since(reconnectStartTime)
 
 				if elapsed.Seconds() >= float64(*reconnectTimeout) {
-					logrus.Fatalf("Reconnection timeout reached after %d attempts over %.0f seconds. Giving up.", reconnectAttempt, elapsed.Seconds())
+					return fmt.Errorf("reconnection timeout reached after %d attempts over %.0f seconds, giving up", reconnectAttempt, elapsed.Seconds())
 				}
 
 				logrus.Infof("Reconnection attempt %d (elapsed: %.0fs/%.0fs). Waiting %d seconds...", reconnectAttempt, elapsed.Seconds(), float64(*reconnectTimeout), *reconnectDelay)
-				time.Sleep(time.Duration(*reconnectDelay) * time.Second)
+				if !sleepContext(ctx, time.Duration(*reconnectDelay)*time.Second) {
+					return nil
+				}
 			} else {
-				logrus.Fatal("Connection lost and reconnect is disabled.")
+				return fmt.Errorf("connection lost and reconnect is disabled")
 			}
 		}
+	}
+}
+
+// sleepContext sleeps for d, returning false if ctx is cancelled first.
+func sleepContext(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
@@ -223,13 +268,13 @@ func sockDial(serverAddr string, socksProxy string, socksUser string, socksPass 
 		Password: socksPass,
 	}, goproxy.Direct)
 	if err != nil {
-		logrus.Fatalf("socks5 error: %v", err)
+		return nil, fmt.Errorf("socks5 error: %w", err)
 	}
 	return proxyDialer.Dial("tcp", serverAddr)
 }
 
 // connect is used when connecting using direct connection.
-func connect(conn net.Conn) (bool, error) {
+func connect(ctx context.Context, conn net.Conn) (bool, error) {
 	// Configure yamux with longer timeouts for multi-hop scenarios
 	yamuxConfig := yamux.DefaultConfig()
 	yamuxConfig.EnableKeepAlive = true
@@ -244,20 +289,35 @@ func connect(conn net.Conn) (bool, error) {
 
 	logrus.WithFields(logrus.Fields{"addr": conn.RemoteAddr()}).Info("Connection established")
 
+	// Closing the connection unblocks Accept, so a cancelled task stops promptly.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			yamuxConn.Close()
+			conn.Close()
+		case <-done:
+		}
+	}()
+
 	for {
 		conn, err := yamuxConn.Accept()
 		if err != nil {
+			if ctx.Err() != nil {
+				return true, nil
+			}
 			return true, err // Connection was established but now lost
 		}
 		go agent.HandleConn(conn)
 	}
 }
 
-func bind(config *tls.Config, bindAddr string) {
+func bind(ctx context.Context, config *tls.Config, bindAddr string) error {
 	selfcrt := tlsutils.NewSelfCert(nil)
 	crt, err := selfcrt.GetCertificate(bindAddr)
 	if err != nil {
-		logrus.Fatal(err)
+		return err
 	}
 	logrus.Warnf("TLS Certificate fingerprint is: %X\n", sha256.Sum256(crt.Certificate[0]))
 	config.GetCertificate = func(info *tls.ClientHelloInfo) (*tls.Certificate, error) {
@@ -265,19 +325,27 @@ func bind(config *tls.Config, bindAddr string) {
 	}
 	lis, err := net.Listen("tcp", bindAddr)
 	if err != nil {
-		logrus.Fatal(err)
+		return err
 	}
+	defer lis.Close()
+	go func() {
+		<-ctx.Done()
+		lis.Close()
+	}()
 	logrus.Infof("Listening on %s...", bindAddr)
 	for {
 		conn, err := lis.Accept()
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
 			logrus.Error(err)
 			continue
 		}
 		logrus.Infof("Got connection from: %s\n", conn.RemoteAddr())
 		tlsConn := tls.Server(conn, config)
 
-		if connSuccess, err := connect(tlsConn); err != nil {
+		if connSuccess, err := connect(ctx, tlsConn); err != nil {
 			logrus.Error(err)
 		} else if connSuccess {
 			// This shouldn't happen as connect only returns on error, but for safety
@@ -287,9 +355,9 @@ func bind(config *tls.Config, bindAddr string) {
 }
 
 // wsconnect is used to connect using websockets.
-func wsconnect(config *tls.Config, wsaddr string, proxy string, useragent string) (bool, error) {
+func wsconnect(parent context.Context, config *tls.Config, wsaddr string, proxy string, useragent string) (bool, error) {
 	//timeout for websocket library connection - 20 seconds
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+	ctx, cancel := context.WithTimeout(parent, time.Second*20)
 	defer cancel()
 
 	//in case of websocket proxy can be http with login:pass
@@ -327,9 +395,9 @@ func wsconnect(config *tls.Config, wsaddr string, proxy string, useragent string
 		return false, err
 	}
 
-	netctx, cancel := context.WithCancel(context.Background())
+	netctx, cancelNet := context.WithCancel(parent)
 	netConn := websocket.NetConn(netctx, wsConn, websocket.MessageBinary)
-	defer cancel()
+	defer cancelNet()
 
 	// FIXED: Configure yamux with better timeout settings for websocket double-hop too
 	yamuxConfig := yamux.DefaultConfig()
@@ -344,9 +412,23 @@ func wsconnect(config *tls.Config, wsaddr string, proxy string, useragent string
 	}
 
 	logrus.Info("Websocket connection established")
+	// Closing the connection unblocks Accept, so a cancelled task stops promptly.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-parent.Done():
+			yamuxConn.Close()
+			netConn.Close()
+		case <-done:
+		}
+	}()
 	for {
 		conn, err := yamuxConn.Accept()
 		if err != nil {
+			if parent.Err() != nil {
+				return true, nil
+			}
 			return true, err // Connection was established but now lost
 		}
 		go agent.HandleConn(conn)
